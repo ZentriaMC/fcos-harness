@@ -168,6 +168,7 @@ async fn main() -> eyre::Result<()> {
             ssh_port,
             ssh_key,
             retry_timeout_secs,
+            sudo,
         } => {
             let platform = Platform::detect()?;
             let session = SshSession::new(SshConfig {
@@ -177,6 +178,7 @@ async fn main() -> eyre::Result<()> {
             });
 
             Goss::new(&cli.work_dir, platform.arch)
+                .sudo(sudo)
                 .validate(
                     &session,
                     &gossfile,

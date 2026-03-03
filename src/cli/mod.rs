@@ -148,6 +148,10 @@ pub enum Commands {
         /// Retry timeout for goss validation (seconds).
         #[arg(long, default_value = "60")]
         retry_timeout_secs: u64,
+
+        /// Run goss with sudo.
+        #[arg(long)]
+        sudo: bool,
     },
 
     /// Execute a command on the VM via SSH.

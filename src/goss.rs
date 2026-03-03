@@ -14,6 +14,7 @@ pub struct Goss {
     version: String,
     cache_dir: PathBuf,
     arch: Arch,
+    sudo: bool,
 }
 
 impl Goss {
@@ -22,11 +23,18 @@ impl Goss {
             version: DEFAULT_GOSS_VERSION.into(),
             cache_dir: cache_dir.into(),
             arch,
+            sudo: false,
         }
     }
 
     pub fn version(mut self, version: impl Into<String>) -> Self {
         self.version = version.into();
+        self
+    }
+
+    /// Run goss with sudo on the remote host.
+    pub fn sudo(mut self, sudo: bool) -> Self {
+        self.sudo = sudo;
         self
     }
 
@@ -91,13 +99,14 @@ impl Goss {
         ssh.upload(&bin_path, "/tmp/goss").await?;
         ssh.upload(gossfile, "/tmp/goss.yaml").await?;
 
+        let prefix = if self.sudo { "sudo " } else { "" };
         let cmd = format!(
-            "/tmp/goss --gossfile /tmp/goss.yaml validate --retry-timeout {}s --sleep {}s",
+            "{prefix}/tmp/goss --gossfile /tmp/goss.yaml validate --retry-timeout {}s --sleep {}s",
             retry_timeout.as_secs(),
             sleep_interval.as_secs(),
         );
 
-        info!("running goss validation");
+        info!(sudo = self.sudo, "running goss validation");
         let output = ssh.exec(&cmd).await?;
         if output.exit_code != 0 {
             bail!(
