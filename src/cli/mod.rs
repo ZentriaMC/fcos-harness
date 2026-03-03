@@ -21,9 +21,9 @@ pub struct Cli {
     )]
     pub work_dir: PathBuf,
 
-    /// UEFI firmware path.
+    /// UEFI firmware path (required for boot/start).
     #[arg(long, env = "QEMU_EFI_FW", global = true)]
-    pub firmware: PathBuf,
+    pub firmware: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]

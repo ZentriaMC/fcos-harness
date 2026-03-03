@@ -53,7 +53,11 @@ async fn main() -> eyre::Result<()> {
         }
 
         Commands::Boot(args) => {
-            fcos_harness::cli::boot::run(args, &cli.work_dir, &cli.firmware).await?;
+            let firmware = cli
+                .firmware
+                .as_ref()
+                .ok_or_else(|| eyre::eyre!("--firmware / QEMU_EFI_FW is required for boot"))?;
+            fcos_harness::cli::boot::run(args, &cli.work_dir, firmware).await?;
         }
 
         Commands::Start {
@@ -76,7 +80,11 @@ async fn main() -> eyre::Result<()> {
             }
 
             // Build QEMU args using VmBuilder, then spawn detached
-            let mut builder = fcos_harness::qemu::VmBuilder::new(platform, &cli.firmware)
+            let firmware = cli
+                .firmware
+                .as_ref()
+                .ok_or_else(|| eyre::eyre!("--firmware / QEMU_EFI_FW is required for start"))?;
+            let mut builder = fcos_harness::qemu::VmBuilder::new(platform, firmware)
                 .disk(&disk)
                 .ssh_port(ssh_port)
                 .hostname(&hostname)
