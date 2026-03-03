@@ -9,7 +9,7 @@ pub mod qmp;
 pub mod ssh;
 
 pub use arch::{Arch, Platform};
-pub use fcos::FcosImage;
+pub use fcos::{FcosImage, ImageVariant};
 pub use goss::Goss;
 pub use ignition::{ButaneSource, IgnitionBuilder};
 pub use qemu::{Vm, VmBuilder};

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use clap::ValueEnum;
 use eyre::{Context, bail};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -11,6 +12,59 @@ use crate::arch::Arch;
 
 const FCOS_BUILDS_URL: &str = "https://builds.coreos.fedoraproject.org/streams";
 
+/// Which FCOS image variant to download and use.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum ImageVariant {
+    /// Standard qemu artifact, qcow2.xz format.
+    #[default]
+    Qemu,
+    /// Metal artifact, 4k.raw.xz format (4K block size disk).
+    #[value(name = "metal4k")]
+    Metal4k,
+}
+
+impl ImageVariant {
+    /// The artifact key in the FCOS stream JSON.
+    pub fn artifact(&self) -> &'static str {
+        match self {
+            Self::Qemu => "qemu",
+            Self::Metal4k => "metal",
+        }
+    }
+
+    /// The format key in the FCOS stream JSON.
+    pub fn format_key(&self) -> &'static str {
+        match self {
+            Self::Qemu => "qcow2.xz",
+            Self::Metal4k => "4k.raw.xz",
+        }
+    }
+
+    /// Filename for the cached decompressed image.
+    pub fn cached_filename(&self) -> &'static str {
+        match self {
+            Self::Qemu => "fcos.qcow2",
+            Self::Metal4k => "fcos-4k.raw",
+        }
+    }
+
+    /// Filename for the compressed download.
+    fn compressed_filename(&self) -> &'static str {
+        match self {
+            Self::Qemu => "fcos.qcow2.xz",
+            Self::Metal4k => "fcos-4k.raw.xz",
+        }
+    }
+
+    /// The qemu-img backing format string (`-F` flag).
+    pub fn backing_format(&self) -> &'static str {
+        match self {
+            Self::Qemu => "qcow2",
+            Self::Metal4k => "raw",
+        }
+    }
+}
+
 /// FCOS stream name (e.g. "stable", "testing", "next").
 #[derive(Debug, Clone)]
 pub struct FcosStream(pub String);
@@ -21,11 +75,12 @@ impl Default for FcosStream {
     }
 }
 
-/// Manages downloading, verifying, and caching FCOS qcow2 images.
+/// Manages downloading, verifying, and caching FCOS images.
 pub struct FcosImage {
     cache_dir: PathBuf,
     stream: FcosStream,
     arch: Arch,
+    variant: ImageVariant,
 }
 
 impl FcosImage {
@@ -34,6 +89,7 @@ impl FcosImage {
             cache_dir: cache_dir.into(),
             stream: FcosStream::default(),
             arch,
+            variant: ImageVariant::default(),
         }
     }
 
@@ -42,10 +98,19 @@ impl FcosImage {
         self
     }
 
-    /// Ensure the base qcow2 image exists, downloading if necessary.
-    /// Returns the path to the uncompressed qcow2 file.
+    pub fn variant(mut self, variant: ImageVariant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    pub fn image_variant(&self) -> ImageVariant {
+        self.variant
+    }
+
+    /// Ensure the base image exists, downloading if necessary.
+    /// Returns the path to the uncompressed image file.
     pub async fn ensure(&self) -> eyre::Result<PathBuf> {
-        let base_disk = self.cache_dir.join("fcos.qcow2");
+        let base_disk = self.cache_dir.join(self.variant.cached_filename());
         if base_disk.exists() {
             info!(path = %base_disk.display(), "FCOS image already cached");
             return Ok(base_disk);
@@ -55,7 +120,7 @@ impl FcosImage {
 
     /// Force a fresh download even if cached.
     pub async fn refresh(&self) -> eyre::Result<PathBuf> {
-        let base_disk = self.cache_dir.join("fcos.qcow2");
+        let base_disk = self.cache_dir.join(self.variant.cached_filename());
         if base_disk.exists() {
             tokio::fs::remove_file(&base_disk).await?;
         }
@@ -79,17 +144,19 @@ impl FcosImage {
             .wrap_err("failed to parse FCOS stream JSON")?;
 
         let arch_str = self.arch.as_str();
-        let qemu_artifact = &metadata["architectures"][arch_str]["artifacts"]["qemu"];
+        let artifact_key = self.variant.artifact();
+        let format_key = self.variant.format_key();
+        let artifact = &metadata["architectures"][arch_str]["artifacts"][artifact_key];
 
-        let url = qemu_artifact["formats"]["qcow2.xz"]["disk"]["location"]
+        let url = artifact["formats"][format_key]["disk"]["location"]
             .as_str()
-            .ok_or_else(|| eyre::eyre!("missing qcow2.xz location for {arch_str}"))?;
+            .ok_or_else(|| eyre::eyre!("missing {format_key} location for {arch_str}"))?;
 
-        let expected_sha256 = qemu_artifact["formats"]["qcow2.xz"]["disk"]["sha256"]
+        let expected_sha256 = artifact["formats"][format_key]["disk"]["sha256"]
             .as_str()
-            .ok_or_else(|| eyre::eyre!("missing qcow2.xz sha256 for {arch_str}"))?;
+            .ok_or_else(|| eyre::eyre!("missing {format_key} sha256 for {arch_str}"))?;
 
-        let compressed_path = self.cache_dir.join("fcos.qcow2.xz");
+        let compressed_path = self.cache_dir.join(self.variant.compressed_filename());
 
         // Stream download with progress bar
         let response = client

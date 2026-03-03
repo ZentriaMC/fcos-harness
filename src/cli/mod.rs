@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+use crate::fcos::ImageVariant;
+
 #[derive(Parser)]
 #[command(name = "fcos-harness", about = "FCOS + QEMU integration test harness")]
 pub struct Cli {
@@ -28,11 +30,15 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Download and cache a FCOS qcow2 image.
+    /// Download and cache a FCOS image.
     Image {
         /// FCOS stream (stable, testing, next).
         #[arg(long, default_value = "next")]
         stream: String,
+
+        /// Image variant (qemu or metal4k).
+        #[arg(long, value_enum, default_value_t = ImageVariant::Qemu)]
+        variant: ImageVariant,
     },
 
     /// Compile Butane files into a merged Ignition config.
@@ -98,6 +104,10 @@ pub enum Commands {
         #[arg(long)]
         loadvm: Option<String>,
 
+        /// Block size for the SCSI disk device (e.g. 4096 for 4K).
+        #[arg(long)]
+        block_size: Option<u32>,
+
         /// File to write the QEMU PID to.
         #[arg(long)]
         pid_file: PathBuf,
@@ -123,6 +133,10 @@ pub enum Commands {
         /// Disk size.
         #[arg(long, default_value = "32G")]
         size: String,
+
+        /// Backing image format (qcow2 or raw).
+        #[arg(long, default_value = "qcow2")]
+        backing_format: String,
     },
 
     /// Send a QMP command to a running VM.

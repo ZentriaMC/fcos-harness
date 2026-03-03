@@ -23,9 +23,11 @@ async fn main() -> eyre::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Image { stream } => {
+        Commands::Image { stream, variant } => {
             let platform = Platform::detect()?;
-            let image = FcosImage::new(&cli.work_dir, platform.arch).stream(stream);
+            let image = FcosImage::new(&cli.work_dir, platform.arch)
+                .stream(stream)
+                .variant(variant);
             let path = image.ensure().await?;
             println!("{}", path.display());
         }
@@ -68,6 +70,7 @@ async fn main() -> eyre::Result<()> {
             serial_log,
             qmp,
             loadvm,
+            block_size,
             pid_file,
         } => {
             let platform = Platform::detect()?;
@@ -98,6 +101,9 @@ async fn main() -> eyre::Result<()> {
             }
             if let Some(ref name) = loadvm {
                 builder = builder.loadvm(name);
+            }
+            if let Some(bs) = block_size {
+                builder = builder.block_size(bs);
             }
 
             let args = builder.build_args();
@@ -161,8 +167,9 @@ async fn main() -> eyre::Result<()> {
             base,
             overlay,
             size,
+            backing_format,
         } => {
-            fcos_harness::disk::create_overlay(&base, &overlay, &size).await?;
+            fcos_harness::disk::create_overlay(&base, &overlay, &size, &backing_format).await?;
         }
 
         Commands::Qmp { socket, command } => {

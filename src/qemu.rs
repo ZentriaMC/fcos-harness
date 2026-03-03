@@ -22,6 +22,7 @@ pub struct VmBuilder {
     snapshot_mode: bool,
     qmp_socket: Option<PathBuf>,
     loadvm: Option<String>,
+    block_size: Option<u32>,
     extra_args: Vec<String>,
 }
 
@@ -41,6 +42,7 @@ impl VmBuilder {
             snapshot_mode: false,
             qmp_socket: None,
             loadvm: None,
+            block_size: None,
             extra_args: Vec::new(),
         }
     }
@@ -100,6 +102,11 @@ impl VmBuilder {
         self
     }
 
+    pub fn block_size(mut self, size: u32) -> Self {
+        self.block_size = Some(size);
+        self
+    }
+
     pub fn extra_arg(mut self, arg: impl Into<String>) -> Self {
         self.extra_args.push(arg.into());
         self
@@ -152,6 +159,12 @@ impl VmBuilder {
         ]);
 
         // Disk
+        let mut scsi_device = "scsi-hd,bus=scsi0.0,drive=root-disk0".to_string();
+        if let Some(bs) = self.block_size {
+            scsi_device.push_str(&format!(
+                ",physical_block_size={bs},logical_block_size={bs}"
+            ));
+        }
         args.extend([
             "-drive".into(),
             format!(
@@ -159,7 +172,7 @@ impl VmBuilder {
                 self.disk.display()
             ),
             "-device".into(),
-            "scsi-hd,bus=scsi0.0,drive=root-disk0".into(),
+            scsi_device,
         ]);
 
         // Snapshot mode

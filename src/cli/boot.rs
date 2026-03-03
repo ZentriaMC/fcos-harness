@@ -4,6 +4,7 @@ use clap::Args;
 use tracing::info;
 
 use crate::arch::Platform;
+use crate::fcos::ImageVariant;
 use crate::qemu::VmBuilder;
 
 #[derive(Args)]
@@ -35,6 +36,10 @@ pub struct BootArgs {
     /// Load from a named QEMU snapshot instead of cold boot.
     #[arg(long)]
     pub loadvm: Option<String>,
+
+    /// Image variant (qemu or metal4k).
+    #[arg(long, value_enum, default_value_t = ImageVariant::Qemu)]
+    pub variant: ImageVariant,
 }
 
 pub async fn run(
@@ -46,13 +51,19 @@ pub async fn run(
 
     // Ensure FCOS image
     let base_disk = crate::fcos::FcosImage::new(work_dir, platform.arch)
+        .variant(args.variant)
         .ensure()
         .await?;
 
-    // Create overlay disk
-    let diff_disk = work_dir.join("diff-boot.qcow2");
+    // Create overlay disk (segregate by variant)
+    let overlay_name = match args.variant {
+        ImageVariant::Qemu => "diff-boot.qcow2",
+        ImageVariant::Metal4k => "diff-boot-4k.qcow2",
+    };
+    let diff_disk = work_dir.join(overlay_name);
     if !diff_disk.exists() {
-        crate::disk::create_overlay(&base_disk, &diff_disk, "32G").await?;
+        crate::disk::create_overlay(&base_disk, &diff_disk, "32G", args.variant.backing_format())
+            .await?;
     }
 
     let mut builder = VmBuilder::new(platform, firmware)
@@ -62,6 +73,10 @@ pub async fn run(
         .ssh_key(&args.ssh_key)
         .hostname(&args.hostname)
         .serial_log(work_dir.join("serial-boot.log"));
+
+    if args.variant == ImageVariant::Metal4k {
+        builder = builder.block_size(4096);
+    }
 
     if args.qmp {
         builder = builder.qmp_socket(work_dir.join("qemu-monitor.sock"));

@@ -5,11 +5,17 @@ use tokio::process::Command;
 use tracing::info;
 
 /// Create a qcow2 copy-on-write overlay backed by `base`.
-pub async fn create_overlay(base: &Path, overlay: &Path, size: &str) -> eyre::Result<()> {
+pub async fn create_overlay(
+    base: &Path,
+    overlay: &Path,
+    size: &str,
+    backing_format: &str,
+) -> eyre::Result<()> {
     info!(
         base = %base.display(),
         overlay = %overlay.display(),
         size,
+        backing_format,
         "creating qcow2 overlay"
     );
 
@@ -25,7 +31,7 @@ pub async fn create_overlay(base: &Path, overlay: &Path, size: &str) -> eyre::Re
             "-b",
             &base.display().to_string(),
             "-F",
-            "qcow2",
+            backing_format,
             &overlay.display().to_string(),
             size,
         ])
