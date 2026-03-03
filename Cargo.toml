@@ -1,0 +1,35 @@
+[package]
+name = "fcos-harness"
+version = "0.1.0"
+edition = "2024"
+description = "FCOS + QEMU integration test harness"
+
+[[bin]]
+name = "fcos-harness"
+path = "src/bin/fcos-harness.rs"
+
+[lib]
+name = "fcos_harness"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4.5.40", features = ["derive", "env"] }
+color-eyre = "0.6.4"
+eyre = "0.6.12"
+futures-util = "0.3.31"
+indicatif = "0.17.11"
+libc = "0.2.182"
+minijinja = "2.9.0"
+reqwest = { version = "0.12.15", features = ["json", "stream"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sha2 = "0.10.9"
+tokio = { version = "1.44.2", features = ["full"] }
+tokio-util = { version = "0.7.15", features = ["io"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+xz2 = "0.1.7"
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+tempfile = "3.19.1"
