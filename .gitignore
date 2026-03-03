@@ -1,4 +1,6 @@
 /target
+/result
+/result-*
 /tmp
 *.swp
 *.swo
