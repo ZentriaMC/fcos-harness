@@ -20,6 +20,7 @@ pub struct IgnitionBuilder {
     butane_bin: PathBuf,
     files_dir: Option<PathBuf>,
     template_vars: HashMap<String, String>,
+    base_ign: Option<PathBuf>,
     sources: Vec<ButaneSource>,
     overlays: Vec<ButaneSource>,
     work_dir: PathBuf,
@@ -31,6 +32,7 @@ impl IgnitionBuilder {
             butane_bin: butane_bin.into(),
             files_dir: None,
             template_vars: HashMap::new(),
+            base_ign: None,
             sources: Vec::new(),
             overlays: Vec::new(),
             work_dir: work_dir.into(),
@@ -40,6 +42,13 @@ impl IgnitionBuilder {
     /// Set the `--files-dir` for butane compilation.
     pub fn files_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.files_dir = Some(dir.into());
+        self
+    }
+
+    /// Set a pre-compiled .ign file as the merge base.
+    /// Overlays will be merged on top of this.
+    pub fn base_ign(mut self, path: impl Into<PathBuf>) -> Self {
+        self.base_ign = Some(path.into());
         self
     }
 
@@ -74,13 +83,22 @@ impl IgnitionBuilder {
 
         let mut compiled_igns: Vec<PathBuf> = Vec::new();
 
-        // Compile each primary source
+        // If a pre-compiled base .ign is provided, copy it into work_dir
+        if let Some(ref base) = self.base_ign {
+            let dest = self.work_dir.join("base.ign");
+            tokio::fs::copy(base, &dest)
+                .await
+                .wrap_err_with(|| format!("failed to copy base .ign from {}", base.display()))?;
+            compiled_igns.push(dest);
+        }
+
+        // Compile each primary .bu source
         for (i, source) in self.sources.iter().enumerate() {
             let ign = self.compile_source(source, &format!("source-{i}")).await?;
             compiled_igns.push(ign);
         }
 
-        // Compile each overlay
+        // Compile each overlay .bu
         let mut overlay_igns: Vec<PathBuf> = Vec::new();
         for (i, source) in self.overlays.iter().enumerate() {
             let ign = self.compile_source(source, &format!("overlay-{i}")).await?;
@@ -88,7 +106,9 @@ impl IgnitionBuilder {
         }
 
         if compiled_igns.is_empty() && overlay_igns.is_empty() {
-            bail!("no Butane sources provided");
+            bail!(
+                "no ignition sources provided (use --base, positional .bu sources, or --overlay)"
+            );
         }
 
         // If we have exactly one source and no overlays, just return it

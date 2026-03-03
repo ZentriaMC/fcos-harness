@@ -38,10 +38,13 @@ pub enum Commands {
     /// Compile Butane files into a merged Ignition config.
     Ignition {
         /// Butane source files to compile and merge.
-        #[arg(required = true)]
         sources: Vec<PathBuf>,
 
-        /// Overlay .bu files to merge on top.
+        /// Pre-compiled .ign file to use as the merge base.
+        #[arg(long)]
+        base: Option<PathBuf>,
+
+        /// Overlay .bu files to compile and merge on top.
         #[arg(long)]
         overlay: Vec<PathBuf>,
 

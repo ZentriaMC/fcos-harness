@@ -4,8 +4,10 @@ use tracing::info;
 
 use crate::ignition::{ButaneSource, IgnitionBuilder};
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     sources: Vec<PathBuf>,
+    base: Option<PathBuf>,
     overlays: Vec<PathBuf>,
     vars: Vec<String>,
     files_dir: Option<PathBuf>,
@@ -18,6 +20,10 @@ pub async fn run(
 
     if let Some(dir) = files_dir {
         builder = builder.files_dir(dir);
+    }
+
+    if let Some(base_ign) = base {
+        builder = builder.base_ign(base_ign);
     }
 
     for var_str in &vars {

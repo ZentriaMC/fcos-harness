@@ -32,6 +32,7 @@ async fn main() -> eyre::Result<()> {
 
         Commands::Ignition {
             sources,
+            base,
             overlay,
             var,
             files_dir,
@@ -40,6 +41,7 @@ async fn main() -> eyre::Result<()> {
         } => {
             fcos_harness::cli::ignition::run(
                 sources,
+                base,
                 overlay,
                 var,
                 files_dir,
