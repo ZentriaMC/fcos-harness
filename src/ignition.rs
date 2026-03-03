@@ -118,13 +118,15 @@ impl IgnitionBuilder {
             return Ok(final_path);
         }
 
-        // Generate a merge wrapper Butane config
-        let merge_bu = self.generate_merge_config(&compiled_igns, &overlay_igns)?;
+        // Generate a merge wrapper Butane config.
+        // Use work_dir as --files-dir since all .ign files are there.
+        let merge_bu = self.generate_merge_config(&compiled_igns, &overlay_igns);
         let merge_bu_path = self.work_dir.join("merge.bu");
         tokio::fs::write(&merge_bu_path, &merge_bu).await?;
 
         let final_path = self.work_dir.join("config.ign");
-        self.run_butane(&merge_bu_path, &final_path).await?;
+        self.run_butane_with_files_dir(&merge_bu_path, &final_path, Some(&self.work_dir.clone()))
+            .await?;
 
         info!(path = %final_path.display(), "Ignition config built");
         Ok(final_path)
@@ -171,6 +173,16 @@ impl IgnitionBuilder {
 
     /// Run butane to compile a .bu file to .ign.
     async fn run_butane(&self, input: &Path, output: &Path) -> eyre::Result<()> {
+        self.run_butane_with_files_dir(input, output, self.files_dir.as_deref())
+            .await
+    }
+
+    async fn run_butane_with_files_dir(
+        &self,
+        input: &Path,
+        output: &Path,
+        files_dir: Option<&Path>,
+    ) -> eyre::Result<()> {
         debug!(
             input = %input.display(),
             output = %output.display(),
@@ -180,8 +192,8 @@ impl IgnitionBuilder {
         let mut cmd = Command::new(&self.butane_bin);
         cmd.arg("--strict");
 
-        if let Some(ref files_dir) = self.files_dir {
-            cmd.arg("--files-dir").arg(files_dir);
+        if let Some(dir) = files_dir {
+            cmd.arg("--files-dir").arg(dir);
         }
 
         let input_content = tokio::fs::read(input)
@@ -221,23 +233,17 @@ impl IgnitionBuilder {
     }
 
     /// Generate a Butane merge config that combines multiple .ign files.
-    fn generate_merge_config(
-        &self,
-        sources: &[PathBuf],
-        overlays: &[PathBuf],
-    ) -> eyre::Result<String> {
+    /// All paths must be filenames within work_dir (used as --files-dir for this step).
+    fn generate_merge_config(&self, sources: &[PathBuf], overlays: &[PathBuf]) -> String {
         let mut merge_entries: Vec<String> = Vec::new();
 
         for path in sources.iter().chain(overlays.iter()) {
-            let abs = if path.is_absolute() {
-                path.clone()
-            } else {
-                std::env::current_dir()?.join(path)
-            };
-            merge_entries.push(format!("        - local: {}", abs.display()));
+            // Use just the filename — butane resolves local: relative to --files-dir
+            let name = path.file_name().unwrap_or(path.as_os_str());
+            merge_entries.push(format!("        - local: {}", name.to_string_lossy()));
         }
 
-        let yaml = format!(
+        format!(
             r#"variant: fcos
 version: "1.5.0"
 ignition:
@@ -246,9 +252,7 @@ ignition:
 {}
 "#,
             merge_entries.join("\n")
-        );
-
-        Ok(yaml)
+        )
     }
 }
 
@@ -286,7 +290,7 @@ storage:
         ];
         let overlays = vec![PathBuf::from("/tmp/test/overlay-0.ign")];
 
-        let config = builder.generate_merge_config(&sources, &overlays).unwrap();
+        let config = builder.generate_merge_config(&sources, &overlays);
         assert!(config.contains("variant: fcos"));
         assert!(config.contains("source-0.ign"));
         assert!(config.contains("source-1.ign"));
