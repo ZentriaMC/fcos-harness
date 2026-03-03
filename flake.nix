@@ -56,7 +56,6 @@
           packages = [
             rustToolchain
             pkgs.butane
-            pkgs.jq
             pkgs.qemu
           ];
 
