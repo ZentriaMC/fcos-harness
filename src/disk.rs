@@ -23,6 +23,12 @@ pub async fn create_overlay(
         tokio::fs::create_dir_all(parent).await?;
     }
 
+    // qemu-img resolves -b relative to the overlay's directory,
+    // so canonicalize the base path to avoid double-nesting.
+    let base = tokio::fs::canonicalize(base)
+        .await
+        .wrap_err_with(|| format!("failed to resolve base image path: {}", base.display()))?;
+
     let output = Command::new("qemu-img")
         .args([
             "create",
