@@ -74,7 +74,7 @@ pub enum Commands {
     /// Boot a FCOS VM interactively (blocks until shutdown).
     Boot(boot::BootArgs),
 
-    /// Start a QEMU VM in the background and return immediately.
+    /// Start a QEMU VM (background by default, or interactive with --interactive).
     Start {
         /// Path to the disk image.
         #[arg(long)]
@@ -92,7 +92,7 @@ pub enum Commands {
         #[arg(long, default_value = "fcos-test")]
         hostname: String,
 
-        /// Serial log path.
+        /// Serial log path (ignored in interactive mode).
         #[arg(long)]
         serial_log: Option<PathBuf>,
 
@@ -108,9 +108,21 @@ pub enum Commands {
         #[arg(long)]
         block_size: Option<u32>,
 
-        /// File to write the QEMU PID to.
+        /// Run QEMU in foreground with serial console on stdio.
         #[arg(long)]
-        pid_file: PathBuf,
+        interactive: bool,
+
+        /// Additional port forward (host:guest, repeatable).
+        #[arg(long)]
+        forward: Vec<String>,
+
+        /// Extra QEMU argument (repeatable).
+        #[arg(long)]
+        qemu_arg: Vec<String>,
+
+        /// File to write the QEMU PID to (required in background mode).
+        #[arg(long)]
+        pid_file: Option<PathBuf>,
     },
 
     /// Stop a background QEMU VM by PID file.

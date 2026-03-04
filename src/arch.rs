@@ -169,7 +169,10 @@ impl Platform {
                             // Glob patterns like "pc-q35-*" or "virt-*" — check if
                             // the base (minus trailing glob) contains our machine type
                             m.as_str().is_some_and(|pattern| {
-                                pattern.trim_end_matches('*').trim_end_matches('-').contains(self.machine_type)
+                                pattern
+                                    .trim_end_matches('*')
+                                    .trim_end_matches('-')
+                                    .contains(self.machine_type)
                             })
                         })
                     });

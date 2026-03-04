@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Args;
+use eyre::Context;
 use tracing::info;
 
 use crate::arch::Platform;
@@ -40,6 +41,18 @@ pub struct BootArgs {
     /// Image variant (qemu or metal4k).
     #[arg(long, value_enum, default_value_t = ImageVariant::Qemu)]
     pub variant: ImageVariant,
+
+    /// Run QEMU in foreground with serial console on stdio.
+    #[arg(long)]
+    pub interactive: bool,
+
+    /// Additional port forward (host:guest, repeatable).
+    #[arg(long)]
+    pub forward: Vec<String>,
+
+    /// Extra QEMU argument (repeatable).
+    #[arg(long)]
+    pub qemu_arg: Vec<String>,
 }
 
 pub async fn run(
@@ -72,7 +85,8 @@ pub async fn run(
         .ssh_port(args.ssh_port)
         .ssh_key(&args.ssh_key)
         .hostname(&args.hostname)
-        .serial_log(work_dir.join("serial-boot.log"));
+        .serial_log(work_dir.join("serial-boot.log"))
+        .interactive(args.interactive);
 
     if args.variant == ImageVariant::Metal4k {
         builder = builder.block_size(4096);
@@ -84,6 +98,27 @@ pub async fn run(
 
     if let Some(ref name) = args.loadvm {
         builder = builder.loadvm(name);
+    }
+
+    for fwd in &args.forward {
+        let (host, guest) = fwd
+            .split_once(':')
+            .ok_or_else(|| eyre::eyre!("invalid forward format '{fwd}', expected host:guest"))?;
+        let host: u16 = host
+            .parse()
+            .wrap_err_with(|| format!("invalid host port in '{fwd}'"))?;
+        let guest: u16 = guest
+            .parse()
+            .wrap_err_with(|| format!("invalid guest port in '{fwd}'"))?;
+        builder = builder.forward(host, guest);
+    }
+
+    for arg in &args.qemu_arg {
+        builder = builder.extra_arg(arg);
+    }
+
+    if args.interactive {
+        return builder.spawn_interactive();
     }
 
     let mut vm = builder.launch().await?;

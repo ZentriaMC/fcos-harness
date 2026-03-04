@@ -71,6 +71,9 @@ async fn main() -> eyre::Result<()> {
             qmp,
             loadvm,
             block_size,
+            interactive,
+            forward,
+            qemu_arg,
             pid_file,
         } => {
             let platform = Platform::detect()?;
@@ -82,7 +85,6 @@ async fn main() -> eyre::Result<()> {
                 tokio::fs::remove_file(sock).await.ok();
             }
 
-            // Build QEMU args using VmBuilder, then spawn detached
             let firmware = match cli.firmware {
                 Some(ref fw) => fw.clone(),
                 None => platform.discover_firmware()?,
@@ -91,7 +93,8 @@ async fn main() -> eyre::Result<()> {
                 .disk(&disk)
                 .ssh_port(ssh_port)
                 .hostname(&hostname)
-                .serial_log(&serial);
+                .serial_log(&serial)
+                .interactive(interactive);
 
             if let Some(ref ign) = ignition {
                 builder = builder.ignition(ign);
@@ -105,38 +108,60 @@ async fn main() -> eyre::Result<()> {
             if let Some(bs) = block_size {
                 builder = builder.block_size(bs);
             }
-
-            let args = builder.build_args();
-
-            // Spawn QEMU as a detached process (survives parent exit)
-            let child = std::process::Command::new(qemu_binary)
-                .args(&args)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .wrap_err_with(|| format!("failed to spawn {qemu_binary}"))?;
-
-            let pid = child.id();
-
-            // Write PID file
-            if let Some(parent) = pid_file.parent() {
-                tokio::fs::create_dir_all(parent).await?;
+            for fwd in &forward {
+                let (host, guest) = fwd.split_once(':').ok_or_else(|| {
+                    eyre::eyre!("invalid forward format '{fwd}', expected host:guest")
+                })?;
+                let host: u16 = host
+                    .parse()
+                    .wrap_err_with(|| format!("invalid host port in '{fwd}'"))?;
+                let guest: u16 = guest
+                    .parse()
+                    .wrap_err_with(|| format!("invalid guest port in '{fwd}'"))?;
+                builder = builder.forward(host, guest);
             }
-            tokio::fs::write(&pid_file, pid.to_string()).await?;
+            for arg in &qemu_arg {
+                builder = builder.extra_arg(arg);
+            }
 
-            // Brief pause to let QEMU initialize
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            if interactive {
+                builder.spawn_interactive()?;
+            } else {
+                let pid_file = pid_file
+                    .ok_or_else(|| eyre::eyre!("--pid-file is required in background mode"))?;
 
-            // Verify it's still running
-            unsafe {
-                if libc::kill(pid as i32, 0) != 0 {
-                    bail!("QEMU failed to start (exited immediately)");
+                let args = builder.build_args();
+
+                // Spawn QEMU as a detached process (survives parent exit)
+                let child = std::process::Command::new(qemu_binary)
+                    .args(&args)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .wrap_err_with(|| format!("failed to spawn {qemu_binary}"))?;
+
+                let pid = child.id();
+
+                // Write PID file
+                if let Some(parent) = pid_file.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
                 }
-            }
+                tokio::fs::write(&pid_file, pid.to_string()).await?;
 
-            info!(pid, pid_file = %pid_file.display(), "QEMU started");
-            println!("{pid}");
+                // Brief pause to let QEMU initialize
+                tokio::time::sleep(Duration::from_secs(2)).await;
+
+                // Verify it's still running
+                unsafe {
+                    if libc::kill(pid as i32, 0) != 0 {
+                        bail!("QEMU failed to start (exited immediately)");
+                    }
+                }
+
+                info!(pid, pid_file = %pid_file.display(), "QEMU started");
+                println!("{pid}");
+            }
         }
 
         Commands::Stop { pid_file } => {

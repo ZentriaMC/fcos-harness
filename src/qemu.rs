@@ -23,6 +23,8 @@ pub struct VmBuilder {
     qmp_socket: Option<PathBuf>,
     loadvm: Option<String>,
     block_size: Option<u32>,
+    interactive: bool,
+    forwards: Vec<(u16, u16)>,
     extra_args: Vec<String>,
 }
 
@@ -43,6 +45,8 @@ impl VmBuilder {
             qmp_socket: None,
             loadvm: None,
             block_size: None,
+            interactive: false,
+            forwards: Vec::new(),
             extra_args: Vec::new(),
         }
     }
@@ -107,6 +111,16 @@ impl VmBuilder {
         self
     }
 
+    pub fn interactive(mut self, enabled: bool) -> Self {
+        self.interactive = enabled;
+        self
+    }
+
+    pub fn forward(mut self, host_port: u16, guest_port: u16) -> Self {
+        self.forwards.push((host_port, guest_port));
+        self
+    }
+
     pub fn extra_arg(mut self, arg: impl Into<String>) -> Self {
         self.extra_args.push(arg.into());
         self
@@ -129,19 +143,24 @@ impl VmBuilder {
             "-m".into(),
             self.memory.clone(),
             "-serial".into(),
-            format!("file:{}", self.serial_log.display()),
+            if self.interactive {
+                "mon:stdio".into()
+            } else {
+                format!("file:{}", self.serial_log.display())
+            },
             "-rtc".into(),
             "base=utc".into(),
         ]);
 
         // Networking
-        args.extend([
-            "-netdev".into(),
-            format!(
-                "user,id=user.0,hostfwd=tcp::{}-:22,hostname={}",
-                self.ssh_port, self.hostname
-            ),
-        ]);
+        let mut netdev = format!(
+            "user,id=user.0,hostfwd=tcp::{}-:22,hostname={}",
+            self.ssh_port, self.hostname
+        );
+        for (host, guest) in &self.forwards {
+            netdev.push_str(&format!(",hostfwd=tcp::{host}-:{guest}"));
+        }
+        args.extend(["-netdev".into(), netdev]);
 
         // Devices
         args.extend([
@@ -209,6 +228,28 @@ impl VmBuilder {
         args.extend(self.extra_args.clone());
 
         args
+    }
+
+    /// Spawn QEMU with inherited stdio (interactive/foreground mode).
+    /// Blocks until QEMU exits.
+    pub fn spawn_interactive(self) -> eyre::Result<()> {
+        let args = self.build_args();
+        info!(
+            binary = self.platform.qemu_binary,
+            ssh_port = self.ssh_port,
+            "spawning QEMU VM (interactive)"
+        );
+
+        let status = std::process::Command::new(self.platform.qemu_binary)
+            .args(&args)
+            .status()
+            .wrap_err_with(|| format!("failed to spawn {}", self.platform.qemu_binary))?;
+
+        if !status.success() {
+            bail!("QEMU exited with {status}");
+        }
+
+        Ok(())
     }
 
     /// Launch the VM as a background process.
