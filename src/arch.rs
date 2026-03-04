@@ -1,6 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use eyre::bail;
+use eyre::{Context, bail};
+use tracing::debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arch {
@@ -99,6 +100,100 @@ impl Platform {
             ],
             FirmwareStyle::Bios => vec!["-bios".into(), fw],
         }
+    }
+
+    /// Auto-discover UEFI firmware by scanning QEMU's bundled firmware descriptors.
+    ///
+    /// Locates the QEMU binary via PATH, resolves symlinks (important for Nix),
+    /// then parses `../share/qemu/firmware/*.json` to find a non-Secure-Boot UEFI
+    /// firmware matching this platform's architecture and machine type.
+    pub fn discover_firmware(&self) -> eyre::Result<PathBuf> {
+        let output = std::process::Command::new("which")
+            .arg(self.qemu_binary)
+            .output()
+            .wrap_err_with(|| format!("failed to locate {}", self.qemu_binary))?;
+
+        if !output.status.success() {
+            bail!("{} not found in PATH", self.qemu_binary);
+        }
+
+        let bin_path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+        let bin_path = std::fs::canonicalize(&bin_path)
+            .wrap_err_with(|| format!("failed to resolve {}", bin_path.display()))?;
+
+        let firmware_dir = bin_path
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("share/qemu/firmware"))
+            .ok_or_else(|| eyre::eyre!("unexpected QEMU binary path structure"))?;
+
+        if !firmware_dir.is_dir() {
+            bail!(
+                "firmware descriptor directory not found: {}",
+                firmware_dir.display()
+            );
+        }
+
+        let arch_str = self.arch.as_str();
+
+        for entry in std::fs::read_dir(&firmware_dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            let content = std::fs::read_to_string(&path)
+                .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+            let desc: serde_json::Value = serde_json::from_str(&content)
+                .wrap_err_with(|| format!("failed to parse {}", path.display()))?;
+
+            // Must be UEFI
+            let interfaces = desc["interface-types"].as_array();
+            if !interfaces.is_some_and(|a| a.iter().any(|v| v.as_str() == Some("uefi"))) {
+                continue;
+            }
+
+            // Must not require SMM (Secure Boot)
+            let features = desc["features"].as_array();
+            if features.is_some_and(|a| a.iter().any(|v| v.as_str() == Some("requires-smm"))) {
+                continue;
+            }
+
+            // Must match our architecture and machine type
+            let targets = desc["targets"].as_array();
+            let matches = targets.is_some_and(|arr| {
+                arr.iter().any(|t| {
+                    let arch_ok = t["architecture"].as_str() == Some(arch_str);
+                    let machine_ok = t["machines"].as_array().is_some_and(|machines| {
+                        machines.iter().any(|m| {
+                            // Glob patterns like "pc-q35-*" or "virt-*" — check if
+                            // the base (minus trailing glob) contains our machine type
+                            m.as_str().is_some_and(|pattern| {
+                                pattern.trim_end_matches('*').trim_end_matches('-').contains(self.machine_type)
+                            })
+                        })
+                    });
+                    arch_ok && machine_ok
+                })
+            });
+            if !matches {
+                continue;
+            }
+
+            if let Some(filename) = desc["mapping"]["executable"]["filename"].as_str() {
+                let fw_path = PathBuf::from(filename);
+                if fw_path.exists() {
+                    debug!(path = %fw_path.display(), "auto-discovered UEFI firmware");
+                    return Ok(fw_path);
+                }
+            }
+        }
+
+        bail!(
+            "no suitable UEFI firmware found for {} in {}",
+            arch_str,
+            firmware_dir.display()
+        )
     }
 
     /// Build the machine-related QEMU arguments.
