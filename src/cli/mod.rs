@@ -1,6 +1,7 @@
 pub mod boot;
 pub mod ignition;
 pub mod ssh;
+pub mod up;
 
 use std::path::PathBuf;
 
@@ -204,6 +205,12 @@ pub enum Commands {
 
     /// Execute a command on the VM via SSH.
     Ssh(ssh::SshArgs),
+
+    /// Bring up a VM: image → disk → start → wait SSH (with optional snapshot caching).
+    Up(up::UpArgs),
+
+    /// Tear down a running VM started by `up`.
+    Down,
 }
 
 #[derive(Subcommand)]

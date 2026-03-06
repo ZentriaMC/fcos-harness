@@ -114,42 +114,33 @@ Use `--sudo` on `fh goss` when checks need root (btrfs commands, systemctl, etc.
 ### 5. Create `hack/test.sh`
 
 There are two patterns. Choose based on whether the project needs fast VM restarts.
+Both use `fh up` / `fh down` which handle image, disk, VM startup, and SSH readiness in one step.
 
 #### Pattern A: Snapshot caching (kerosene, subvault, swanny, syringe)
 
 Use when: tests modify VM state or deploy binaries, and you want instant VM restore.
-The script saves a QEMU snapshot after initial boot+goss, then restores from it for tests.
+`fh up --snapshot` hashes the ignition config, saves a QEMU snapshot after first boot,
+and restores from it on subsequent runs (until the config changes).
 
 ```bash
 #!/usr/bin/env bash
 # E2E test: boot a FCOS VM, validate with goss, run PROJECT tests.
-# Uses QEMU savevm/loadvm to cache a booted VM snapshot for fast restarts.
 #
 # Env vars:
-#   TEST_SSH_PORT      SSH port forward (default: 2223)
-#   REBUILD_SNAPSHOT   Set to 1 to force snapshot recreation
-#   KEEP_VM            Set to 1 to keep VM running after tests
+#   TEST_SSH_PORT           SSH port forward (default: 2223)
+#   FCOS_HARNESS_SSH_KEY    SSH key (set below)
+#   KEEP_VM                 Set to 1 to keep VM running after tests
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
-work_dir="${root}/tmp/vm"
+export FCOS_HARNESS_WORK_DIR="${root}/tmp/vm"
+export FCOS_HARNESS_SSH_KEY="${root}/hack/dev/dev_ed25519"
 ssh_port="${TEST_SSH_PORT:-2223}"
-ssh_key="${root}/hack/dev/dev_ed25519"
 
-snapshot_disk="${work_dir}/fcos-snapshot.qcow2"
-snapshot_name="ssh-ready"
-snapshot_hash_file="${work_dir}/snapshot.hash"
-monitor_sock="${work_dir}/qemu-monitor.sock"
-pid_file="${work_dir}/qemu.pid"
+chmod 600 "${FCOS_HARNESS_SSH_KEY}"
 
-chmod 600 "${ssh_key}"
-
-fh() {
-    fcos-harness --work-dir "${work_dir}" "$@"
-}
-fh_ssh() {
-    fh ssh --ssh-key "${ssh_key}" --ssh-port "${ssh_port}" "$@"
-}
+fh() { fcos-harness "$@"; }
+fh_ssh() { fh ssh --ssh-key "${FCOS_HARNESS_SSH_KEY}" --ssh-port "${ssh_port}" "$@"; }
 
 # -- Build Ignition config --
 make -C "${root}/hack/init" config.ign
@@ -159,93 +150,18 @@ ign="${root}/hack/init/config.ign"
 # echo ">>> Building PROJECT..."
 # cargo build --release 2>&1
 
-# -- Ensure FCOS base image --
-fh image
-
-# -- Snapshot caching --
-sha256() {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | cut -d' ' -f1
-    else
-        shasum -a 256 "$1" | cut -d' ' -f1
-    fi
-}
-
-current_hash="$(sha256 "${ign}")"
-use_snapshot=false
-
-if [ "${REBUILD_SNAPSHOT:-}" != "1" ] \
-    && [ -f "${snapshot_disk}" ] \
-    && [ -f "${snapshot_hash_file}" ] \
-    && [ "$(cat "${snapshot_hash_file}")" = "${current_hash}" ] \
-    && qemu-img snapshot -l "${snapshot_disk}" 2>/dev/null | grep -q "${snapshot_name}"; then
-    use_snapshot=true
-    echo ">>> Valid VM snapshot found, skipping boot+goss"
-fi
-
-if [ "${use_snapshot}" = false ]; then
-    echo ">>> Creating VM snapshot (first run or config changed)..."
-    rm -f "${snapshot_disk}" "${snapshot_hash_file}"
-    fh disk --base "${work_dir}/fcos.qcow2" --overlay "${snapshot_disk}"
-
-    fh start \
-        --disk "${snapshot_disk}" \
-        --ignition "${ign}" \
-        --ssh-port "${ssh_port}" \
-        --hostname PROJECT-test \
-        --serial-log "${work_dir}/serial-test.log" \
-        --qmp "${monitor_sock}" \
-        --pid-file "${pid_file}"
-
-    cleanup_snapshot() {
-        fh stop --pid-file "${pid_file}" 2>/dev/null || true
-        rm -f "${monitor_sock}"
-    }
-    trap cleanup_snapshot EXIT
-
-    echo ">>> Waiting for SSH..."
-    fh_ssh --wait 180 -- true
-
-    echo ">>> Running goss validation..."
-    fh goss "${root}/hack/goss.yaml" --ssh-key "${ssh_key}" --ssh-port "${ssh_port}" --retry-timeout-secs 30
-
-    echo ">>> Saving VM snapshot '${snapshot_name}'..."
-    fh qmp --socket "${monitor_sock}" savevm "${snapshot_name}"
-
-    echo ">>> Stopping snapshot VM..."
-    fh qmp --socket "${monitor_sock}" quit
-    sleep 1
-    fh stop --pid-file "${pid_file}" 2>/dev/null || true
-    rm -f "${monitor_sock}"
-    trap - EXIT
-
-    echo "${current_hash}" > "${snapshot_hash_file}"
-    echo ">>> Snapshot created"
-fi
-
-# -- Boot from snapshot --
-echo ">>> Booting test VM from snapshot..."
-fh start \
-    --disk "${snapshot_disk}" \
+# -- Bring up VM (image + disk + start + wait SSH, with snapshot) --
+fh up \
     --ignition "${ign}" \
-    --ssh-port "${ssh_port}" \
     --hostname PROJECT-test \
-    --serial-log "${work_dir}/serial-test.log" \
-    --loadvm "${snapshot_name}" \
-    --pid-file "${pid_file}"
+    --snapshot ssh-ready \
+    --snapshot-goss "${root}/hack/goss.yaml"
 
-cleanup() {
-    echo ">>> Shutting down test VM..."
-    fh stop --pid-file "${pid_file}" 2>/dev/null || true
-}
-trap cleanup EXIT
-
-echo ">>> Waiting for SSH (should be instant from snapshot)..."
-fh_ssh --wait 30 -- true
+trap 'fh down' EXIT
 
 # -- Run project-specific tests here --
 echo ">>> Running tests..."
-# ...
+# fh_ssh -- command-on-vm ...
 
 echo ">>> All tests passed!"
 
@@ -253,60 +169,42 @@ echo ">>> All tests passed!"
 if [ "${KEEP_VM:-}" = "1" ]; then
     echo ">>> VM is still running (ssh -p ${ssh_port} core@127.0.0.1)"
     echo ">>> Press Ctrl-C to stop..."
-    trap cleanup INT
-    wait "$(cat "${pid_file}")"
+    trap 'fh down' INT
+    wait "$(cat "${FCOS_HARNESS_WORK_DIR}/qemu.pid")"
 fi
 ```
 
 #### Pattern B: Simple cold boot (fcos-k3s)
 
-Use when: no snapshot needed, just boot → goss → done.
+Use when: no snapshot needed, just boot → validate → done.
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
-work_dir="${root}/tmp/vm"
+export FCOS_HARNESS_WORK_DIR="${root}/tmp/vm"
+export FCOS_HARNESS_SSH_KEY="${root}/hack/dev/dev_ed25519"
 ssh_port="${TEST_SSH_PORT:-2223}"
-ssh_key="${root}/hack/dev/dev_ed25519"   # or dev/ at repo root
-pid_file="${work_dir}/qemu.pid"
-diffdisk="${work_dir}/diff-test.qcow2"
 
-fh() {
-    fcos-harness --work-dir "${work_dir}" "$@"
-}
+chmod 600 "${FCOS_HARNESS_SSH_KEY}"
 
 # -- Build Ignition config (using fh ignition for overlays) --
-fh ignition --base "${root}/init/config.ign" \
+fcos-harness ignition --base "${root}/init/config.ign" \
     --overlay "${root}/hack/overlay/users.bu" \
     --overlay "${root}/hack/overlay/hostname.bu" \
-    -o "${work_dir}/config.ign"
-ign="${work_dir}/config.ign"
+    -o "${FCOS_HARNESS_WORK_DIR}/config.ign"
 
-# -- Ensure base image + overlay --
-fh image
-if ! [ -f "${diffdisk}" ]; then
-    fh disk --base "${work_dir}/fcos.qcow2" --overlay "${diffdisk}"
-fi
+# -- Bring up VM --
+fcos-harness up \
+    --ignition "${FCOS_HARNESS_WORK_DIR}/config.ign" \
+    --hostname test
 
-# -- Boot --
-fh start \
-    --disk "${diffdisk}" \
-    --ignition "${ign}" \
-    --ssh-port "${ssh_port}" \
-    --hostname test \
-    --serial-log "${work_dir}/serial-test.log" \
-    --pid-file "${pid_file}"
-
-cleanup() { fh stop --pid-file "${pid_file}" 2>/dev/null || true; }
-trap cleanup EXIT
-
-fh ssh --ssh-key "${ssh_key}" --ssh-port "${ssh_port}" --wait 180 -- true
+trap 'fcos-harness down' EXIT
 
 # -- Validate --
-fh goss "${root}/hack/goss.yaml" \
-    --ssh-key "${ssh_key}" --ssh-port "${ssh_port}" \
+fcos-harness goss "${root}/hack/goss.yaml" \
+    --ssh-key "${FCOS_HARNESS_SSH_KEY}" --ssh-port "${ssh_port}" \
     --retry-timeout-secs 300 --sudo
 
 echo ">>> All tests passed"

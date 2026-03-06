@@ -356,6 +356,17 @@ impl Vm {
         Ok(status)
     }
 
+    /// Get the QEMU process PID.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
+    /// Detach from the QEMU process so `Drop` won't kill it.
+    /// Used by `up` to keep the VM running after the CLI exits.
+    pub fn detach(self) {
+        std::mem::forget(self);
+    }
+
     /// Send SIGTERM and wait for exit.
     pub async fn shutdown(&mut self) -> eyre::Result<()> {
         info!("shutting down QEMU VM");

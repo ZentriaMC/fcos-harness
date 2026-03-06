@@ -239,6 +239,20 @@ async fn main() -> eyre::Result<()> {
         Commands::Ssh(args) => {
             fcos_harness::cli::ssh::run(args).await?;
         }
+
+        Commands::Up(args) => {
+            let firmware = match cli.firmware {
+                Some(ref fw) => fw.clone(),
+                None => Platform::detect()?.discover_firmware()?,
+            };
+            let cache_dir =
+                (!cli.cache_dir.as_os_str().is_empty()).then_some(cli.cache_dir.as_path());
+            fcos_harness::cli::up::run(args, &cli.work_dir, cache_dir, &firmware).await?;
+        }
+
+        Commands::Down => {
+            fcos_harness::cli::up::down(&cli.work_dir).await?;
+        }
     }
 
     Ok(())
