@@ -13,11 +13,11 @@ pub struct SshArgs {
     pub command: Vec<String>,
 
     /// SSH port.
-    #[arg(long, env = "TEST_SSH_PORT", default_value = "2223")]
+    #[arg(long, env = "FCOS_HARNESS_SSH_PORT", default_value = "2223")]
     pub ssh_port: u16,
 
     /// SSH private key.
-    #[arg(long)]
+    #[arg(long, env = "FCOS_HARNESS_SSH_KEY")]
     pub ssh_key: PathBuf,
 
     /// SSH user.

@@ -21,7 +21,7 @@ pub struct UpArgs {
     pub ssh_key: PathBuf,
 
     /// SSH port forward.
-    #[arg(long, env = "TEST_SSH_PORT", default_value = "2223")]
+    #[arg(long, env = "FCOS_HARNESS_SSH_PORT", default_value = "2223")]
     pub ssh_port: u16,
 
     /// VM hostname.

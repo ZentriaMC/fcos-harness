@@ -105,7 +105,7 @@ pub enum Commands {
         ignition: Option<PathBuf>,
 
         /// SSH port forward.
-        #[arg(long, env = "TEST_SSH_PORT", default_value = "2223")]
+        #[arg(long, env = "FCOS_HARNESS_SSH_PORT", default_value = "2223")]
         ssh_port: u16,
 
         /// VM hostname.
@@ -187,11 +187,11 @@ pub enum Commands {
         gossfile: PathBuf,
 
         /// SSH port of the running VM.
-        #[arg(long, env = "TEST_SSH_PORT", default_value = "2223")]
+        #[arg(long, env = "FCOS_HARNESS_SSH_PORT", default_value = "2223")]
         ssh_port: u16,
 
         /// SSH private key.
-        #[arg(long)]
+        #[arg(long, env = "FCOS_HARNESS_SSH_KEY")]
         ssh_key: PathBuf,
 
         /// Retry timeout for goss validation (seconds).

@@ -127,7 +127,7 @@ and restores from it on subsequent runs (until the config changes).
 # E2E test: boot a FCOS VM, validate with goss, run PROJECT tests.
 #
 # Env vars:
-#   TEST_SSH_PORT           SSH port forward (default: 2223)
+#   FCOS_HARNESS_SSH_PORT   SSH port forward (default: 2223)
 #   FCOS_HARNESS_SSH_KEY    SSH key (set below)
 #   KEEP_VM                 Set to 1 to keep VM running after tests
 set -euo pipefail
@@ -135,12 +135,11 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 export FCOS_HARNESS_WORK_DIR="${root}/tmp/vm"
 export FCOS_HARNESS_SSH_KEY="${root}/hack/dev/dev_ed25519"
-ssh_port="${TEST_SSH_PORT:-2223}"
+export FCOS_HARNESS_SSH_PORT="${FCOS_HARNESS_SSH_PORT:-2223}"
 
 chmod 600 "${FCOS_HARNESS_SSH_KEY}"
 
 fh() { fcos-harness "$@"; }
-fh_ssh() { fh ssh --ssh-key "${FCOS_HARNESS_SSH_KEY}" --ssh-port "${ssh_port}" "$@"; }
 
 # -- Build Ignition config --
 make -C "${root}/hack/init" config.ign
@@ -161,16 +160,18 @@ trap 'fh down' EXIT
 
 # -- Run project-specific tests here --
 echo ">>> Running tests..."
-# fh_ssh -- command-on-vm ...
+# fh ssh -- command-on-vm ...
 
 echo ">>> All tests passed!"
 
 # -- Keep VM running if requested --
 if [ "${KEEP_VM:-}" = "1" ]; then
-    echo ">>> VM is still running (ssh -p ${ssh_port} core@127.0.0.1)"
+    echo ">>> VM is still running (ssh -p ${FCOS_HARNESS_SSH_PORT} core@127.0.0.1)"
     echo ">>> Press Ctrl-C to stop..."
-    trap 'fh down' INT
-    wait "$(cat "${FCOS_HARNESS_WORK_DIR}/qemu.pid")"
+    trap 'fh down; exit 0' INT
+    while kill -0 "$(cat "${FCOS_HARNESS_WORK_DIR}/qemu.pid")" 2>/dev/null; do
+        sleep 1
+    done
 fi
 ```
 
@@ -185,7 +186,7 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 export FCOS_HARNESS_WORK_DIR="${root}/tmp/vm"
 export FCOS_HARNESS_SSH_KEY="${root}/hack/dev/dev_ed25519"
-ssh_port="${TEST_SSH_PORT:-2223}"
+export FCOS_HARNESS_SSH_PORT="${FCOS_HARNESS_SSH_PORT:-2223}"
 
 chmod 600 "${FCOS_HARNESS_SSH_KEY}"
 
@@ -204,7 +205,6 @@ trap 'fcos-harness down' EXIT
 
 # -- Validate --
 fcos-harness goss "${root}/hack/goss.yaml" \
-    --ssh-key "${FCOS_HARNESS_SSH_KEY}" --ssh-port "${ssh_port}" \
     --retry-timeout-secs 300 --sudo
 
 echo ">>> All tests passed"
@@ -261,7 +261,7 @@ For projects where the binary runs inside the VM (subvault, swanny, syringe):
 3. SCP into VM after SSH is ready:
    ```bash
    scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-       -P "${ssh_port}" -i "${ssh_key}" \
+       -P "${FCOS_HARNESS_SSH_PORT}" -i "${FCOS_HARNESS_SSH_KEY}" \
        "${binary}" core@127.0.0.1:/usr/local/bin/name
    ```
 4. For Rust cross-compile, add `pkgs.zig` to the Nix devShell and `cargo-zigbuild` to dependencies.
