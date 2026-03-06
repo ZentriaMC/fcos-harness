@@ -48,14 +48,6 @@ impl ImageVariant {
         }
     }
 
-    /// Filename for the compressed download.
-    fn compressed_filename(&self) -> &'static str {
-        match self {
-            Self::Qemu => "fcos.qcow2.xz",
-            Self::Metal4k => "fcos-4k.raw.xz",
-        }
-    }
-
     /// The qemu-img backing format string (`-F` flag).
     pub fn backing_format(&self) -> &'static str {
         match self {
@@ -75,22 +67,43 @@ impl Default for FcosStream {
     }
 }
 
+/// Resolved metadata from a FCOS stream.
+struct StreamArtifact {
+    version: String,
+    url: String,
+    sha256: String,
+}
+
 /// Manages downloading, verifying, and caching FCOS images.
+///
+/// Two modes depending on whether `cache_dir` is set:
+/// - **With cache**: versioned storage in `{cache_dir}/images/{stream}/{arch}/{version}/`,
+///   symlink in `work_dir` pointing to the active version. Repeated calls skip network
+///   if the symlink is valid.
+/// - **Without cache** (legacy): flat storage directly in `work_dir` (`work_dir/fcos.qcow2`).
+///   If the file exists, no network call is made.
 pub struct FcosImage {
-    cache_dir: PathBuf,
+    work_dir: PathBuf,
+    cache_dir: Option<PathBuf>,
     stream: FcosStream,
     arch: Arch,
     variant: ImageVariant,
 }
 
 impl FcosImage {
-    pub fn new(cache_dir: impl Into<PathBuf>, arch: Arch) -> Self {
+    pub fn new(work_dir: impl Into<PathBuf>, arch: Arch) -> Self {
         Self {
-            cache_dir: cache_dir.into(),
+            work_dir: work_dir.into(),
+            cache_dir: None,
             stream: FcosStream::default(),
             arch,
             variant: ImageVariant::default(),
         }
+    }
+
+    pub fn cache_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.cache_dir = Some(dir.into());
+        self
     }
 
     pub fn stream(mut self, stream: impl Into<String>) -> Self {
@@ -107,29 +120,134 @@ impl FcosImage {
         self.variant
     }
 
+    /// Versioned cache path: `{cache_dir}/images/{stream}/{arch}/{version}/{filename}`
+    fn versioned_path(&self, cache_dir: &Path, version: &str) -> PathBuf {
+        cache_dir
+            .join("images")
+            .join(&self.stream.0)
+            .join(self.arch.as_str())
+            .join(version)
+            .join(self.variant.cached_filename())
+    }
+
+    /// Local image path in work_dir (e.g. `work_dir/fcos.qcow2`).
+    fn local_path(&self) -> PathBuf {
+        self.work_dir.join(self.variant.cached_filename())
+    }
+
     /// Ensure the base image exists, downloading if necessary.
-    /// Returns the path to the uncompressed image file.
     pub async fn ensure(&self) -> eyre::Result<PathBuf> {
-        let base_disk = self.cache_dir.join(self.variant.cached_filename());
-        if base_disk.exists() {
-            info!(path = %base_disk.display(), "FCOS image already cached");
-            return Ok(base_disk);
+        match &self.cache_dir {
+            Some(cache_dir) => self.ensure_cached(cache_dir).await,
+            None => self.ensure_local().await,
         }
-        self.download(&base_disk).await
     }
 
-    /// Force a fresh download even if cached.
+    /// Force a fresh download of the latest version.
     pub async fn refresh(&self) -> eyre::Result<PathBuf> {
-        let base_disk = self.cache_dir.join(self.variant.cached_filename());
-        if base_disk.exists() {
-            tokio::fs::remove_file(&base_disk).await?;
+        match &self.cache_dir {
+            Some(cache_dir) => self.refresh_cached(cache_dir).await,
+            None => self.refresh_local().await,
         }
-        self.download(&base_disk).await
     }
 
-    async fn download(&self, dest: &Path) -> eyre::Result<PathBuf> {
-        tokio::fs::create_dir_all(&self.cache_dir).await?;
+    // --- Legacy (flat) mode: image stored directly in work_dir ---
 
+    async fn ensure_local(&self) -> eyre::Result<PathBuf> {
+        let dest = self.local_path();
+        if dest.exists() {
+            info!(path = %dest.display(), "FCOS image already present");
+            return Ok(dest);
+        }
+        let artifact = self.fetch_metadata().await?;
+        self.download(&artifact, &dest).await?;
+        Ok(dest)
+    }
+
+    async fn refresh_local(&self) -> eyre::Result<PathBuf> {
+        let dest = self.local_path();
+        if dest.exists() {
+            tokio::fs::remove_file(&dest).await?;
+        }
+        let artifact = self.fetch_metadata().await?;
+        self.download(&artifact, &dest).await?;
+        Ok(dest)
+    }
+
+    // --- Cached (versioned) mode: image in cache_dir, symlink in work_dir ---
+
+    async fn ensure_cached(&self, cache_dir: &Path) -> eyre::Result<PathBuf> {
+        let link = self.local_path();
+        if link.exists() {
+            // Regular file = per-project override or pre-existing image; use directly.
+            let meta = tokio::fs::symlink_metadata(&link).await?;
+            if !meta.is_symlink() {
+                info!(path = %link.display(), "using local image (not a symlink)");
+                return Ok(link);
+            }
+            // Valid symlink → no network
+            let resolved = tokio::fs::canonicalize(&link)
+                .await
+                .wrap_err("failed to resolve image symlink")?;
+            info!(path = %resolved.display(), "FCOS image already linked");
+            return Ok(resolved);
+        }
+
+        let artifact = self.fetch_metadata().await?;
+        let cached_image = self.versioned_path(cache_dir, &artifact.version);
+
+        if cached_image.exists() {
+            info!(
+                path = %cached_image.display(),
+                version = artifact.version,
+                "FCOS image already cached",
+            );
+        } else {
+            self.download(&artifact, &cached_image).await?;
+        }
+
+        self.update_symlink(&cached_image).await?;
+        Ok(cached_image)
+    }
+
+    async fn refresh_cached(&self, cache_dir: &Path) -> eyre::Result<PathBuf> {
+        let artifact = self.fetch_metadata().await?;
+        let cached_image = self.versioned_path(cache_dir, &artifact.version);
+
+        if cached_image.exists() {
+            tokio::fs::remove_file(&cached_image).await?;
+        }
+
+        self.download(&artifact, &cached_image).await?;
+        self.update_symlink(&cached_image).await?;
+        Ok(cached_image)
+    }
+
+    async fn update_symlink(&self, target: &Path) -> eyre::Result<()> {
+        let link = self.local_path();
+        if let Some(parent) = link.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        // Remove stale symlink (or regular file from old layout)
+        tokio::fs::remove_file(&link).await.ok();
+        tokio::fs::symlink(target, &link).await.wrap_err_with(|| {
+            format!(
+                "failed to symlink {} -> {}",
+                link.display(),
+                target.display(),
+            )
+        })?;
+        info!(
+            link = %link.display(),
+            target = %target.display(),
+            "symlinked image",
+        );
+        Ok(())
+    }
+
+    // --- Shared helpers ---
+
+    async fn fetch_metadata(&self) -> eyre::Result<StreamArtifact> {
         let stream_url = format!("{}/{}.json", FCOS_BUILDS_URL, self.stream.0);
         info!(url = stream_url, arch = %self.arch, "fetching FCOS stream metadata");
 
@@ -148,19 +266,42 @@ impl FcosImage {
         let format_key = self.variant.format_key();
         let artifact = &metadata["architectures"][arch_str]["artifacts"][artifact_key];
 
+        let version = artifact["release"]
+            .as_str()
+            .ok_or_else(|| eyre::eyre!("missing release version for {artifact_key}/{arch_str}"))?
+            .to_string();
+
         let url = artifact["formats"][format_key]["disk"]["location"]
             .as_str()
-            .ok_or_else(|| eyre::eyre!("missing {format_key} location for {arch_str}"))?;
+            .ok_or_else(|| eyre::eyre!("missing {format_key} location for {arch_str}"))?
+            .to_string();
 
-        let expected_sha256 = artifact["formats"][format_key]["disk"]["sha256"]
+        let sha256 = artifact["formats"][format_key]["disk"]["sha256"]
             .as_str()
-            .ok_or_else(|| eyre::eyre!("missing {format_key} sha256 for {arch_str}"))?;
+            .ok_or_else(|| eyre::eyre!("missing {format_key} sha256 for {arch_str}"))?
+            .to_string();
 
-        let compressed_path = self.cache_dir.join(self.variant.compressed_filename());
+        info!(version, "resolved FCOS stream version");
+        Ok(StreamArtifact {
+            version,
+            url,
+            sha256,
+        })
+    }
 
-        // Stream download with progress bar
+    async fn download(&self, artifact: &StreamArtifact, dest: &Path) -> eyre::Result<()> {
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let compressed_path = dest.with_extension(format!(
+            "{}.xz",
+            dest.extension().unwrap_or_default().to_string_lossy()
+        ));
+
+        let client = reqwest::Client::new();
         let response = client
-            .get(url)
+            .get(&artifact.url)
             .send()
             .await
             .wrap_err("failed to download FCOS image")?;
@@ -191,14 +332,17 @@ impl FcosImage {
         file.flush().await?;
         drop(file);
 
-        // Verify SHA256 (streaming, not buffered)
+        // Verify SHA256
         info!("verifying SHA256 checksum");
         let actual_sha256 = sha256_of_file(&compressed_path).await?;
-        if actual_sha256 != expected_sha256 {
-            bail!("SHA256 mismatch: expected {expected_sha256}, got {actual_sha256}");
+        if actual_sha256 != artifact.sha256 {
+            bail!(
+                "SHA256 mismatch: expected {}, got {actual_sha256}",
+                artifact.sha256,
+            );
         }
 
-        // Decompress XZ → qcow2
+        // Decompress XZ
         info!("decompressing XZ image");
         decompress_xz(&compressed_path, dest).await?;
 
@@ -206,7 +350,7 @@ impl FcosImage {
         tokio::fs::remove_file(&compressed_path).await.ok();
 
         info!(path = %dest.display(), "FCOS image ready");
-        Ok(dest.to_path_buf())
+        Ok(())
     }
 }
 

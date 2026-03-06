@@ -58,15 +58,17 @@ pub struct BootArgs {
 pub async fn run(
     args: BootArgs,
     work_dir: &std::path::Path,
+    cache_dir: Option<&std::path::Path>,
     firmware: &std::path::Path,
 ) -> eyre::Result<()> {
     let platform = Platform::detect()?;
 
     // Ensure FCOS image
-    let base_disk = crate::fcos::FcosImage::new(work_dir, platform.arch)
-        .variant(args.variant)
-        .ensure()
-        .await?;
+    let mut image = crate::fcos::FcosImage::new(work_dir, platform.arch).variant(args.variant);
+    if let Some(dir) = cache_dir {
+        image = image.cache_dir(dir);
+    }
+    let base_disk = image.ensure().await?;
 
     // Create overlay disk (segregate by variant)
     let overlay_name = match args.variant {

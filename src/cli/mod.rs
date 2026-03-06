@@ -8,13 +8,23 @@ use clap::{Parser, Subcommand};
 
 use crate::fcos::ImageVariant;
 
+fn default_cache_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        PathBuf::from(xdg).join("fcos-harness")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".cache/fcos-harness")
+    } else {
+        PathBuf::from(".cache/fcos-harness")
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "fcos-harness", about = "FCOS + QEMU integration test harness")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
-    /// Working directory for VM artifacts (images, overlays, logs).
+    /// Working directory for VM artifacts (overlays, logs, PID files).
     #[arg(
         long,
         env = "FCOS_HARNESS_WORK_DIR",
@@ -22,6 +32,15 @@ pub struct Cli {
         global = true
     )]
     pub work_dir: PathBuf,
+
+    /// Cache directory for downloaded images and tools.
+    #[arg(
+        long,
+        env = "FCOS_HARNESS_CACHE_DIR",
+        default_value_os_t = default_cache_dir(),
+        global = true
+    )]
+    pub cache_dir: PathBuf,
 
     /// UEFI firmware path (required for boot/start).
     #[arg(long, env = "QEMU_EFI_FW", global = true)]

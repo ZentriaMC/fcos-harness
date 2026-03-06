@@ -26,9 +26,12 @@ async fn main() -> eyre::Result<()> {
     match cli.command {
         Commands::Image { stream, variant } => {
             let platform = Platform::detect()?;
-            let image = FcosImage::new(&cli.work_dir, platform.arch)
+            let mut image = FcosImage::new(&cli.work_dir, platform.arch)
                 .stream(stream)
                 .variant(variant);
+            if !cli.cache_dir.as_os_str().is_empty() {
+                image = image.cache_dir(&cli.cache_dir);
+            }
             let path = image.ensure().await?;
             println!("{}", path.display());
         }
@@ -60,7 +63,9 @@ async fn main() -> eyre::Result<()> {
                 Some(ref fw) => fw.clone(),
                 None => Platform::detect()?.discover_firmware()?,
             };
-            fcos_harness::cli::boot::run(args, &cli.work_dir, &firmware).await?;
+            let cache_dir =
+                (!cli.cache_dir.as_os_str().is_empty()).then_some(cli.cache_dir.as_path());
+            fcos_harness::cli::boot::run(args, &cli.work_dir, cache_dir, &firmware).await?;
         }
 
         Commands::Start {
@@ -220,7 +225,7 @@ async fn main() -> eyre::Result<()> {
                 ..SshConfig::default()
             });
 
-            Goss::new(&cli.work_dir, platform.arch)
+            Goss::new(&cli.cache_dir, platform.arch)
                 .sudo(sudo)
                 .validate(
                     &session,
