@@ -116,6 +116,22 @@ Use `--sudo` on `fh goss` when checks need root (btrfs commands, systemctl, etc.
 There are two patterns. Choose based on whether the project needs fast VM restarts.
 Both use `fh up` / `fh down` which handle image, disk, VM startup, and SSH readiness in one step.
 
+Both patterns also work with the **vfkit backend** for nested-virtualization scenarios
+on Apple Silicon — add `--backend vfkit --nested` to the `fh up` call. See the
+**vfkit backend** section under Variations below for the caveats.
+
+`fh up` writes a `vm-state.json` file into `work_dir`; `fh ssh` reads it as the
+default host/port/user, so consumer scripts don't need to track SSH endpoints
+across backend switches.
+
+For raw `ssh`/`scp` invocations (e.g. uploading binaries with scp), use
+`fh ssh --emit-opts` to get the connection options:
+
+```bash
+scp $(fh ssh --emit-opts) ./binary _:/usr/local/bin/foo   # _ is a placeholder; -oHostname= overrides
+ssh $(fh ssh --emit-opts) _ -- 'systemctl status foo'
+```
+
 #### Pattern A: Snapshot caching (kerosene, subvault, swanny, syringe)
 
 Use when: tests modify VM state or deploy binaries, and you want instant VM restore.
@@ -166,10 +182,10 @@ echo ">>> All tests passed!"
 
 # -- Keep VM running if requested --
 if [ "${KEEP_VM:-}" = "1" ]; then
-    echo ">>> VM is still running (ssh -p ${FCOS_HARNESS_SSH_PORT} core@127.0.0.1)"
-    echo ">>> Press Ctrl-C to stop..."
+    echo ">>> VM is still running; press Ctrl-C to stop..."
     trap 'fh down; exit 0' INT
-    while kill -0 "$(cat "${FCOS_HARNESS_WORK_DIR}/qemu.pid")" 2>/dev/null; do
+    # Backend-agnostic: the state file is written by `up` and removed by `down`.
+    while [ -f "${FCOS_HARNESS_WORK_DIR}/vm-state.json" ]; do
         sleep 1
     done
 fi
@@ -271,6 +287,45 @@ For projects where the binary runs inside the VM (subvault, swanny, syringe):
 
 Pass `--variant metal4k` to `fh image` and `fh disk` commands. The overlay filenames are
 automatically segregated (e.g. `diff-boot-4k.qcow2`). Useful for testing 4K-native storage.
+
+### vfkit backend (nested virt on Apple Silicon)
+
+QEMU + HVF cannot do nested virtualization on Apple Silicon — HVF doesn't expose it.
+The vfkit backend uses macOS Virtualization.framework, which supports nested virt on
+**M3+ chips running macOS 15 (Sequoia) or later**.
+
+Trigger via `--backend vfkit --nested` on `fh up`:
+
+```bash
+fh up --backend vfkit --nested \
+    --ignition "${ign}" \
+    --hostname PROJECT-test \
+    --snapshot ssh-ready \
+    --snapshot-goss "${root}/hack/goss.yaml"
+```
+
+Behavior differences vs the QEMU backend:
+
+- **Image variant** auto-defaults to `applehv` (built with `platform=applehv` so
+  vfkit's native `--ignition` flag works). `qemu` / `metal4k` variants are rejected
+  with vfkit; `applehv` is rejected with QEMU.
+- **SSH endpoint** is the guest's NAT IP (e.g. `192.168.64.x`) on port 22, not
+  `127.0.0.1:2223`. `fh up` writes this into `vm-state.json` and `fh ssh` picks it
+  up automatically — scripts don't need to change.
+- **Port forwards** (`--forward`) are not supported (vmnet NAT has no native
+  port-forward primitive). Access services on their direct guest port via the IP.
+- **Snapshot caching** uses a **warmed-disk clone**, not a memory snapshot. After
+  first boot + (optional) goss, the guest is poweroff'd, the disk is APFS-cloned
+  to `snapshot-applehv.raw`, and the VM is relaunched from the same disk. Future
+  matching runs clone `snapshot-applehv.raw` and cold-boot. Roughly halves boot
+  time compared to a fresh first-boot — not as instant as QEMU's `savevm`/`loadvm`.
+- **No firmware flag** needed; vfkit creates its own EFI variable store
+  (`efi-vars.fd` in work_dir).
+- The vfkit binary is provided by the Nix devShell on aarch64-darwin. On other
+  platforms the backend errors with a clear message.
+
+If your project only needs nested virt on macOS, use vfkit; otherwise the QEMU
+backend stays the default everywhere.
 
 ### Overlay-based ignition (fcos-k3s pattern)
 

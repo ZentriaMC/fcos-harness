@@ -5,6 +5,7 @@ use eyre::Context;
 use tracing::info;
 
 use crate::arch::Platform;
+use crate::backend::Backend;
 use crate::fcos::ImageVariant;
 use crate::qemu::VmBuilder;
 
@@ -74,6 +75,7 @@ pub async fn run(
     let overlay_name = match args.variant {
         ImageVariant::Qemu => "diff-boot.qcow2",
         ImageVariant::Metal4k => "diff-boot-4k.qcow2",
+        ImageVariant::AppleHv => "diff-boot-applehv.raw",
     };
     let diff_disk = work_dir.join(overlay_name);
     if !diff_disk.exists() {
@@ -123,7 +125,7 @@ pub async fn run(
         return builder.spawn_interactive();
     }
 
-    let mut vm = builder.launch().await?;
+    let mut vm: Box<dyn Backend> = Box::new(builder.launch().await?);
 
     let timeout = if args.loadvm.is_some() {
         std::time::Duration::from_secs(30)

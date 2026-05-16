@@ -1,4 +1,5 @@
 pub mod arch;
+pub mod backend;
 pub mod cli;
 pub mod disk;
 pub mod fcos;
@@ -6,15 +7,21 @@ pub mod goss;
 pub mod ignition;
 pub mod qemu;
 pub mod qmp;
+pub mod snapshot;
 pub mod ssh;
+pub mod state;
+pub mod vfkit;
 
 pub use arch::{Arch, Platform};
+pub use backend::{Backend, BackendKind};
 pub use fcos::{FcosImage, ImageVariant};
 pub use goss::Goss;
 pub use ignition::{ButaneSource, IgnitionBuilder};
 pub use qemu::{Vm, VmBuilder};
-pub use qmp::{QmpClient, SnapshotCache};
+pub use qmp::QmpClient;
+pub use snapshot::{SnapshotCache, SnapshotKind};
 pub use ssh::{SshConfig, SshOutput, SshSession};
+pub use state::VmState;
 
 use std::path::Path;
 

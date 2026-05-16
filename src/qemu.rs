@@ -1,10 +1,13 @@
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 
+use async_trait::async_trait;
 use eyre::{Context, bail};
 use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::arch::Platform;
+use crate::backend::Backend;
 use crate::ssh::{SshConfig, SshSession};
 
 /// Builder for configuring and launching a QEMU VM.
@@ -385,5 +388,36 @@ impl Drop for Vm {
             // Best-effort kill; we can't await in Drop
             let _ = self.child.start_kill();
         }
+    }
+}
+
+#[async_trait]
+impl Backend for Vm {
+    fn ssh(&self) -> SshSession {
+        Vm::ssh(self)
+    }
+
+    fn ssh_config(&self) -> &SshConfig {
+        Vm::ssh_config(self)
+    }
+
+    fn pid(&self) -> Option<u32> {
+        Vm::pid(self)
+    }
+
+    async fn serial_tail(&self, lines: usize) -> eyre::Result<String> {
+        Vm::serial_tail(self, lines).await
+    }
+
+    async fn shutdown(&mut self) -> eyre::Result<()> {
+        Vm::shutdown(self).await
+    }
+
+    async fn wait(&mut self) -> eyre::Result<ExitStatus> {
+        Vm::wait(self).await
+    }
+
+    fn detach(self: Box<Self>) {
+        Vm::detach(*self);
     }
 }

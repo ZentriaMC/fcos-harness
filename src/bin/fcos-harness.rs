@@ -5,6 +5,7 @@ use eyre::{Context, bail};
 use tracing::info;
 
 use fcos_harness::arch::Platform;
+use fcos_harness::backend::BackendKind;
 use fcos_harness::cli::{Cli, Commands, QmpCommand};
 use fcos_harness::fcos::FcosImage;
 use fcos_harness::goss::Goss;
@@ -237,17 +238,23 @@ async fn main() -> eyre::Result<()> {
         }
 
         Commands::Ssh(args) => {
-            fcos_harness::cli::ssh::run(args).await?;
+            fcos_harness::cli::ssh::run(args, &cli.work_dir).await?;
         }
 
         Commands::Up(args) => {
-            let firmware = match cli.firmware {
-                Some(ref fw) => fw.clone(),
-                None => Platform::detect()?.discover_firmware()?,
+            // vfkit doesn't need QEMU firmware; skip discovery to avoid requiring
+            // qemu in PATH on vfkit-only setups.
+            let firmware = if args.resolved_backend() == BackendKind::Qemu {
+                Some(match cli.firmware {
+                    Some(ref fw) => fw.clone(),
+                    None => Platform::detect()?.discover_firmware()?,
+                })
+            } else {
+                None
             };
             let cache_dir =
                 (!cli.cache_dir.as_os_str().is_empty()).then_some(cli.cache_dir.as_path());
-            fcos_harness::cli::up::run(args, &cli.work_dir, cache_dir, &firmware).await?;
+            fcos_harness::cli::up::run(args, &cli.work_dir, cache_dir, firmware.as_deref()).await?;
         }
 
         Commands::Down => {

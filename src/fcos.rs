@@ -21,6 +21,9 @@ pub enum ImageVariant {
     /// Metal artifact, 4k.raw.xz format (4K block size disk).
     #[value(name = "metal4k")]
     Metal4k,
+    /// Apple Hypervisor artifact, raw.gz format (for vfkit / Virtualization.framework).
+    #[value(name = "applehv")]
+    AppleHv,
 }
 
 impl ImageVariant {
@@ -29,6 +32,7 @@ impl ImageVariant {
         match self {
             Self::Qemu => "qemu",
             Self::Metal4k => "metal",
+            Self::AppleHv => "applehv",
         }
     }
 
@@ -37,6 +41,7 @@ impl ImageVariant {
         match self {
             Self::Qemu => "qcow2.xz",
             Self::Metal4k => "4k.raw.xz",
+            Self::AppleHv => "raw.gz",
         }
     }
 
@@ -45,6 +50,7 @@ impl ImageVariant {
         match self {
             Self::Qemu => "fcos.qcow2",
             Self::Metal4k => "fcos-4k.raw",
+            Self::AppleHv => "fcos-applehv.raw",
         }
     }
 
@@ -52,7 +58,31 @@ impl ImageVariant {
     pub fn backing_format(&self) -> &'static str {
         match self {
             Self::Qemu => "qcow2",
-            Self::Metal4k => "raw",
+            Self::Metal4k | Self::AppleHv => "raw",
+        }
+    }
+
+    /// The compression algorithm used by the upstream artifact.
+    pub fn compression(&self) -> Compression {
+        match self {
+            Self::Qemu | Self::Metal4k => Compression::Xz,
+            Self::AppleHv => Compression::Gz,
+        }
+    }
+}
+
+/// Compression algorithm for upstream FCOS artifacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compression {
+    Xz,
+    Gz,
+}
+
+impl Compression {
+    pub fn extension(&self) -> &'static str {
+        match self {
+            Self::Xz => "xz",
+            Self::Gz => "gz",
         }
     }
 }
@@ -294,9 +324,11 @@ impl FcosImage {
             tokio::fs::create_dir_all(parent).await?;
         }
 
+        let compression = self.variant.compression();
         let compressed_path = dest.with_extension(format!(
-            "{}.xz",
-            dest.extension().unwrap_or_default().to_string_lossy()
+            "{}.{}",
+            dest.extension().unwrap_or_default().to_string_lossy(),
+            compression.extension(),
         ));
 
         let client = reqwest::Client::new();
@@ -342,9 +374,12 @@ impl FcosImage {
             );
         }
 
-        // Decompress XZ
-        info!("decompressing XZ image");
-        decompress_xz(&compressed_path, dest).await?;
+        // Decompress
+        info!(compression = ?compression, "decompressing image");
+        match compression {
+            Compression::Xz => decompress_xz(&compressed_path, dest).await?,
+            Compression::Gz => decompress_gz(&compressed_path, dest).await?,
+        }
 
         // Clean up compressed file
         tokio::fs::remove_file(&compressed_path).await.ok();
@@ -397,6 +432,40 @@ async fn decompress_xz(src: &Path, dest: &Path) -> eyre::Result<()> {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             let n = decoder.read(&mut buf).wrap_err("xz decompression failed")?;
+            if n == 0 {
+                break;
+            }
+            writer.write_all(&buf[..n])?;
+        }
+        writer.flush()?;
+
+        Ok::<(), eyre::Report>(())
+    })
+    .await
+    .wrap_err("decompression task panicked")??;
+
+    Ok(())
+}
+
+async fn decompress_gz(src: &Path, dest: &Path) -> eyre::Result<()> {
+    let src = src.to_path_buf();
+    let dest = dest.to_path_buf();
+
+    tokio::task::spawn_blocking(move || {
+        use std::io::{BufReader, BufWriter, Read, Write};
+
+        let input = std::fs::File::open(&src)
+            .wrap_err_with(|| format!("failed to open {}", src.display()))?;
+        let reader = BufReader::new(input);
+        let mut decoder = flate2::read::GzDecoder::new(reader);
+
+        let output = std::fs::File::create(&dest)
+            .wrap_err_with(|| format!("failed to create {}", dest.display()))?;
+        let mut writer = BufWriter::new(output);
+
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = decoder.read(&mut buf).wrap_err("gz decompression failed")?;
             if n == 0 {
                 break;
             }

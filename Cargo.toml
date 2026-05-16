@@ -13,9 +13,11 @@ name = "fcos_harness"
 path = "src/lib.rs"
 
 [dependencies]
+async-trait = "0.1.83"
 clap = { version = "4.5.40", features = ["derive", "env"] }
 color-eyre = "0.6.4"
 eyre = "0.6.12"
+flate2 = "1.1.5"
 futures-util = "0.3.31"
 indicatif = "0.17.11"
 libc = "0.2.182"

@@ -57,6 +57,8 @@
             rustToolchain
             pkgs.butane
             pkgs.qemu
+          ] ++ pkgs.lib.optionals (pkgs.stdenv.isDarwin && pkgs.stdenv.isAarch64) [
+            pkgs.vfkit
           ];
 
           BUTANE = "${pkgs.butane}/bin/butane";

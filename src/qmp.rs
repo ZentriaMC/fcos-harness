@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use eyre::{Context, bail};
 use serde_json::json;
@@ -89,74 +89,6 @@ impl QmpClient {
         let cmd = json!({"execute": "quit"});
         // quit may drop the connection, so we ignore errors
         let _ = self.send_command(cmd).await;
-        Ok(())
-    }
-}
-
-/// Manages snapshot caching with hash-based invalidation.
-///
-/// Pattern: hash the ignition config, save a VM snapshot after boot + goss,
-/// and reuse it until the hash changes.
-pub struct SnapshotCache {
-    disk_path: PathBuf,
-    hash_file: PathBuf,
-    snapshot_name: String,
-}
-
-impl SnapshotCache {
-    pub fn new(
-        disk_path: impl Into<PathBuf>,
-        hash_file: impl Into<PathBuf>,
-        snapshot_name: impl Into<String>,
-    ) -> Self {
-        Self {
-            disk_path: disk_path.into(),
-            hash_file: hash_file.into(),
-            snapshot_name: snapshot_name.into(),
-        }
-    }
-
-    pub fn disk_path(&self) -> &Path {
-        &self.disk_path
-    }
-
-    pub fn snapshot_name(&self) -> &str {
-        &self.snapshot_name
-    }
-
-    /// Check if a valid snapshot exists for the given content hash.
-    pub async fn is_valid(&self, current_hash: &str) -> eyre::Result<bool> {
-        // Check that the disk file exists
-        if !self.disk_path.exists() {
-            return Ok(false);
-        }
-
-        // Check that the hash file matches
-        let stored_hash = match tokio::fs::read_to_string(&self.hash_file).await {
-            Ok(h) => h,
-            Err(_) => return Ok(false),
-        };
-
-        if stored_hash.trim() != current_hash {
-            return Ok(false);
-        }
-
-        // Check that the snapshot actually exists in the disk image
-        crate::disk::snapshot_exists(&self.disk_path, &self.snapshot_name).await
-    }
-
-    /// Record the hash after saving a snapshot.
-    pub async fn record(&self, hash: &str) -> eyre::Result<()> {
-        tokio::fs::write(&self.hash_file, hash)
-            .await
-            .wrap_err("failed to write snapshot hash file")?;
-        Ok(())
-    }
-
-    /// Clean up stale snapshot files for a fresh start.
-    pub async fn invalidate(&self) -> eyre::Result<()> {
-        tokio::fs::remove_file(&self.disk_path).await.ok();
-        tokio::fs::remove_file(&self.hash_file).await.ok();
         Ok(())
     }
 }
