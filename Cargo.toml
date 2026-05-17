@@ -1,8 +1,8 @@
 [package]
 name = "fcos-harness"
-version = "0.1.0"
+version = "2026.5.1"
 edition = "2024"
-description = "FCOS + QEMU integration test harness"
+description = "FCOS integration test harness with QEMU and vfkit backends"
 
 [[bin]]
 name = "fcos-harness"
