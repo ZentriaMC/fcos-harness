@@ -424,11 +424,15 @@ pub async fn run(
     tokio::fs::write(pid_file, pid.to_string()).await?;
 
     let cfg = vm.ssh_config();
+    let identity_file = tokio::fs::canonicalize(&args.ssh_key)
+        .await
+        .wrap_err_with(|| format!("failed to resolve --ssh-key: {}", args.ssh_key.display()))?;
     VmState {
         backend: backend.as_str().to_string(),
         host: cfg.host.clone(),
         port: cfg.port,
         user: cfg.user.clone(),
+        identity_file: Some(identity_file),
     }
     .write(work_dir)
     .await?;

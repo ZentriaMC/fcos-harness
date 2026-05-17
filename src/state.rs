@@ -15,6 +15,8 @@ pub struct VmState {
     pub host: String,
     pub port: u16,
     pub user: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_file: Option<PathBuf>,
 }
 
 impl VmState {

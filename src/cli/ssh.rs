@@ -22,9 +22,9 @@ pub struct SshArgs {
     #[arg(long, env = "FCOS_HARNESS_SSH_PORT")]
     pub ssh_port: Option<u16>,
 
-    /// SSH private key.
+    /// SSH private key. Defaults to the state file written by `fh up`.
     #[arg(long, env = "FCOS_HARNESS_SSH_KEY")]
-    pub ssh_key: PathBuf,
+    pub ssh_key: Option<PathBuf>,
 
     /// SSH user. Defaults to the state file written by `fh up`, else "core".
     #[arg(long)]
@@ -56,13 +56,21 @@ pub async fn run(args: SshArgs, work_dir: &Path) -> eyre::Result<()> {
         .user
         .or_else(|| state.as_ref().map(|s| s.user.clone()))
         .unwrap_or_else(|| "core".into());
+    let ssh_key = args
+        .ssh_key
+        .or_else(|| state.as_ref().and_then(|s| s.identity_file.clone()))
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "no SSH key available: pass --ssh-key, set FCOS_HARNESS_SSH_KEY, or run `fh up` first"
+            )
+        })?;
 
     if args.emit_opts {
         let opts = [
             format!("-oHostname={host}"),
             format!("-oPort={port}"),
             format!("-oUser={user}"),
-            format!("-oIdentityFile={}", args.ssh_key.display()),
+            format!("-oIdentityFile={}", ssh_key.display()),
             "-oStrictHostKeyChecking=no".into(),
             "-oUserKnownHostsFile=/dev/null".into(),
             "-oLogLevel=ERROR".into(),
@@ -80,7 +88,7 @@ pub async fn run(args: SshArgs, work_dir: &Path) -> eyre::Result<()> {
         host,
         port,
         user,
-        identity_file: args.ssh_key,
+        identity_file: ssh_key,
         ..SshConfig::default()
     });
 
