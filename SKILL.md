@@ -121,16 +121,27 @@ on Apple Silicon — add `--backend vfkit --nested` to the `fh up` call. See the
 **vfkit backend** section under Variations below for the caveats.
 
 `fh up` writes a `vm-state.json` file into `work_dir`; `fh ssh` reads it as the
-default host/port/user, so consumer scripts don't need to track SSH endpoints
-across backend switches.
+default host/port/user/identity file, so consumer scripts don't need to track SSH
+endpoints across backend switches.
 
 For raw `ssh`/`scp` invocations (e.g. uploading binaries with scp), use
-`fh ssh --emit-opts` to get the connection options:
+`fh ssh --emit-opts` to get the connection options. Output is one `-o…` token
+per line, so both `bash $(...)` and `fish (...)` auto-split correctly:
 
 ```bash
+# bash / sh
 scp $(fh ssh --emit-opts) ./binary _:/usr/local/bin/foo   # _ is a placeholder; -oHostname= overrides
 ssh $(fh ssh --emit-opts) _ -- 'systemctl status foo'
 ```
+
+```fish
+# fish
+scp (fh ssh --emit-opts) ./binary _:/usr/local/bin/foo
+ssh (fh ssh --emit-opts) _ -- 'systemctl status foo'
+```
+
+zsh users need explicit splitting: `ssh ${=$(fh ssh --emit-opts)} _ -- '…'`
+(zsh doesn't word-split command substitutions by default).
 
 #### Pattern A: Snapshot caching (kerosene, subvault, swanny, syringe)
 

@@ -34,9 +34,10 @@ pub struct SshArgs {
     #[arg(long, default_value = "0")]
     pub wait: u64,
 
-    /// Print ssh/scp `-o` options for the current VM and exit, instead of running
-    /// a command. Useful for embedding into scp/rsync invocations, e.g.
-    /// `scp $(fh ssh --emit-opts) file dest:/path`.
+    /// Print ssh/scp `-o` options for the current VM (one per line) and exit,
+    /// instead of running a command. One-per-line so fish `(cmd)` and bash
+    /// `$(cmd)` both auto-split correctly. Useful for embedding into scp/rsync,
+    /// e.g. `scp (fh ssh --emit-opts) file dest:/path`.
     #[arg(long, conflicts_with = "command")]
     pub emit_opts: bool,
 }
@@ -76,7 +77,9 @@ pub async fn run(args: SshArgs, work_dir: &Path) -> eyre::Result<()> {
             "-oLogLevel=ERROR".into(),
             "-oConnectTimeout=5".into(),
         ];
-        println!("{}", opts.join(" "));
+        for opt in &opts {
+            println!("{opt}");
+        }
         return Ok(());
     }
 
